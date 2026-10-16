@@ -1,0 +1,119 @@
+@import "tailwindcss";
+
+/* Design tokens from the Course Recommender handoff (dark, OKLCH is the source of truth). */
+:root {
+  color-scheme: dark;
+  --page: oklch(0.17 0.03 255);
+  --panel: oklch(0.22 0.035 255);
+  --row-open: oklch(0.21 0.035 255);
+  --table-head: oklch(0.2 0.03 255);
+  --line: oklch(0.28 0.03 255);
+  --line-bar: oklch(0.34 0.04 255);
+  --line-btn: oklch(0.42 0.04 255);
+  --line-quiet: oklch(0.3 0.03 255);
+  --fg: oklch(0.95 0.01 255);
+  --fg-2: oklch(0.88 0.02 255);
+  --fg-3: oklch(0.8 0.03 255);
+  --fg-muted: oklch(0.7 0.03 255);
+  --fg-label: oklch(0.62 0.03 255);
+  --fg-placeholder: oklch(0.55 0.03 255);
+  --accent: oklch(0.78 0.12 240);
+  --accent-hover: oklch(0.9 0.08 240);
+  --on-accent: oklch(0.18 0.03 255);
+  --accent-disabled: oklch(0.45 0.03 255);
+  --btn-secondary-bg: oklch(0.25 0.05 250);
+  --btn-secondary-bg-hover: oklch(0.3 0.06 250);
+  --btn-secondary-border: oklch(0.5 0.06 245);
+  --chip-code-bg: oklch(0.3 0.05 250);
+  --chip-pref-bg: oklch(0.3 0.06 160);
+  --chip-pref-fg: oklch(0.9 0.08 160);
+  --take-fg: oklch(0.82 0.12 160);
+  --take-bg: oklch(0.3 0.06 160);
+  --caveat-fg: oklch(0.85 0.12 85);
+  --caveat-bg: oklch(0.3 0.06 85);
+  --skip-fg: oklch(0.8 0.12 20);
+  --skip-bg: oklch(0.3 0.06 20);
+  --seat-full: oklch(0.82 0.12 85);
+  --warn-bg: oklch(0.28 0.06 85);
+  --warn-fg: oklch(0.88 0.12 85);
+  --notoffered-title: oklch(0.85 0.1 85);
+  --dot-off: oklch(0.35 0.03 255);
+  --danger-fg: oklch(0.8 0.12 20);
+}
+
+@theme inline {
+  --color-page: var(--page);
+  --color-panel: var(--panel);
+  --color-row-open: var(--row-open);
+  --color-table-head: var(--table-head);
+  --color-line: var(--line);
+  --color-line-bar: var(--line-bar);
+  --color-line-btn: var(--line-btn);
+  --color-line-quiet: var(--line-quiet);
+  --color-fg: var(--fg);
+  --color-fg-2: var(--fg-2);
+  --color-fg-3: var(--fg-3);
+  --color-fg-muted: var(--fg-muted);
+  --color-fg-label: var(--fg-label);
+  --color-accent: var(--accent);
+  --color-on-accent: var(--on-accent);
+  --color-accent-disabled: var(--accent-disabled);
+  --color-btn2-bg: var(--btn-secondary-bg);
+  --color-btn2-border: var(--btn-secondary-border);
+  --color-chip-code: var(--chip-code-bg);
+  --color-chip-pref: var(--chip-pref-bg);
+  --color-chip-pref-fg: var(--chip-pref-fg);
+  --color-take-fg: var(--take-fg);
+  --color-take-bg: var(--take-bg);
+  --color-caveat-fg: var(--caveat-fg);
+  --color-caveat-bg: var(--caveat-bg);
+  --color-skip-fg: var(--skip-fg);
+  --color-skip-bg: var(--skip-bg);
+  --color-seat-full: var(--seat-full);
+  --color-warn-bg: var(--warn-bg);
+  --color-warn-fg: var(--warn-fg);
+  --color-notoffered: var(--notoffered-title);
+  --color-dot-off: var(--dot-off);
+}
+
+body {
+  margin: 0;
+  background: var(--page);
+  color: var(--fg);
+  font-family: var(--font-dm), system-ui, sans-serif;
+  font-size: 15px;
+  line-height: 1.45;
+}
+
+.font-code {
+  font-family: var(--font-jb), ui-monospace, monospace;
+}
+
+a {
+  color: var(--accent);
+}
+a:hover {
+  color: var(--accent-hover);
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: var(--fg-placeholder);
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+/* Inside the clipped command bar the ring has to sit inside the cell. */
+.bar-cell :focus-visible,
+.bar-cell:focus-within {
+  outline-offset: -2px;
+}
+.bar-cell input:focus-visible,
+.bar-cell select:focus-visible {
+  outline: none;
+}
+.bar-cell:focus-within {
+  outline: 2px solid var(--accent);
+}
