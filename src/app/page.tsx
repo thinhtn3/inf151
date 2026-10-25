@@ -1,10 +1,12 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
 import { DegreeWorksDialog } from "@/components/degreeworks-dialog";
+import { Planner } from "@/components/planner";
 import { extractCourses } from "@/lib/courses";
 import { parsePriorities } from "@/lib/priorities";
-import type { Result, Row, Term, Verdict } from "@/lib/types";
+import type { PlanItem, Result, Row, Term, Verdict } from "@/lib/types";
 
 const MAX_COURSES = 60;
 
@@ -23,6 +25,8 @@ const VERDICT: Record<Verdict, { label: string; fg: string; bg: string }> = {
 
 const EVIDENCE_LABEL = ["No evidence", "Limited evidence", "Some evidence", "Strong evidence"];
 
+const PLAN_KEY = "planner:plans";
+
 const COLS = "grid grid-cols-[36px_minmax(0,2fr)_minmax(0,1.2fr)_90px_80px_120px_150px_20px] gap-x-3";
 
 export default function Home() {
@@ -37,6 +41,36 @@ export default function Home() {
   const [understood, setUnderstood] = useState<string[]>([]);
   const [open, setOpen] = useState<string | null>(null);
   const [importOpen, setImportOpen] = useState(false);
+  const [plans, setPlansState] = useState<Record<string, PlanItem[]>>({}); // term key -> courses planned for it
+  const plan = plans[term] ?? [];
+  const [planOpen, setPlanOpen] = useState(false);
+  const planCount = Object.values(plans).reduce((n, p) => n + p.length, 0);
+
+  // Saved plans live in this browser only. Read them after mount so the server and client render the same.
+  useEffect(() => {
+    let saved: Record<string, PlanItem[]> = {};
+    try {
+      saved = JSON.parse(localStorage.getItem(PLAN_KEY) ?? "{}");
+    } catch {}
+    void Promise.resolve().then(() => setPlansState(saved));
+  }, []);
+
+  function setPlans(next: Record<string, PlanItem[]>) {
+    setPlansState(next);
+    try {
+      localStorage.setItem(PLAN_KEY, JSON.stringify(next));
+    } catch {}
+  }
+
+  const toItem = (r: Row): PlanItem => ({ code: r.code, title: r.title, units: r.units });
+  const addToPlan = (rows: Row[]) => setPlans({ ...plans, [term]: [...plan, ...rows.filter((r) => !plan.some((p) => p.code === r.code)).map(toItem)] });
+  const removeFromPlan = (code: string, from: string) => setPlans({ ...plans, [from]: (plans[from] ?? []).filter((p) => p.code !== code) });
+  const moveInPlan = (code: string, from: string, to: string) => {
+    const item = (plans[from] ?? []).find((p) => p.code === code);
+    if (!item) return;
+    setPlans({ ...plans, [from]: plans[from].filter((p) => p.code !== code), [to]: [...(plans[to] ?? []).filter((p) => p.code !== code), item] });
+  };
+  const inPlan = (code: string) => plan.some((p) => p.code === code);
 
   useEffect(() => {
     fetch("/api/recommend")
@@ -89,10 +123,20 @@ export default function Home() {
           ...(term && { term: { year, quarter } }),
         }),
       });
-      const body = await res.json();
-      if (!res.ok) {
+      // A platform error (timeout, crash) comes back as HTML, not JSON, so read it defensively.
+      const raw = await res.text();
+      let body: (Partial<Result> & { error?: string }) | null = null;
+      try {
+        body = JSON.parse(raw);
+      } catch {}
+      if (!res.ok || !body) {
         setResult(null);
-        setError(body.error ?? "Something went wrong. Try again.");
+        setError(
+          body?.error ??
+            (res.status === 504 || res.status === 408
+              ? "Ranking took too long and timed out. Try fewer courses."
+              : `The server returned an error (${res.status}). If this is your deployed site, check its function logs.`),
+        );
       } else {
         setResult(body as Result);
         setOpen(null);
@@ -105,6 +149,18 @@ export default function Home() {
     }
   }
 
+  // The app is one page, so "home" means clearing the search back to the empty state.
+  function goHome() {
+    setCourseText("");
+    setPrefText("");
+    setInProgress([]);
+    setResult(null);
+    setError(null);
+    setUnderstood([]);
+    setOpen(null);
+    setStatus("idle");
+  }
+
   const onEnter = (e: React.KeyboardEvent) => {
     if (e.key === "Enter") {
       e.preventDefault();
@@ -113,12 +169,30 @@ export default function Home() {
   };
 
   return (
-    <div className="min-h-screen">
+    <div className={`min-h-screen transition-[padding] duration-200 ${planOpen ? "xl:pr-[420px]" : ""}`}>
       <header className="flex items-center justify-between gap-4 border-b border-line px-8 py-4">
         <div className="flex items-baseline gap-3">
-          <span className="text-[17px] font-semibold text-accent">Course Recommender</span>
+          <Link
+            href="/"
+            onClick={(e) => {
+              e.preventDefault();
+              goHome();
+            }}
+            className="text-[17px] font-semibold text-accent no-underline hover:opacity-80"
+          >
+            Course Recommender
+          </Link>
           <span className="text-sm text-fg-muted">UC Irvine</span>
         </div>
+        <button
+          type="button"
+          onClick={() => setPlanOpen((o) => !o)}
+          aria-expanded={planOpen}
+          aria-controls="plan"
+          className="cursor-pointer rounded-full border border-line-btn bg-transparent px-3 py-1 text-sm text-fg-2 hover:border-accent"
+        >
+          Plan{planCount > 0 ? ` · ${planCount}` : ""}
+        </button>
       </header>
 
       <main className="mx-auto max-w-[1040px] px-8 pb-16">
@@ -214,6 +288,15 @@ export default function Home() {
               <h2 className="m-0 text-[22px] font-medium">
                 {result.rows.length ? `${result.rows.length} ranked for ${result.term.label}` : `Nothing to rank for ${result.term.label}`}
               </h2>
+              {result.rows.some((r) => r.verdict === "take" && !inPlan(r.code)) && (
+                <button
+                  type="button"
+                  onClick={() => addToPlan(result.rows.filter((r) => r.verdict === "take"))}
+                  className="cursor-pointer rounded-full border border-dashed border-line-btn bg-transparent px-3 py-[5px] text-[13px] text-fg-3 hover:border-accent"
+                >
+                  + Plan every &ldquo;Take it&rdquo;
+                </button>
+              )}
               {understood.length > 0 && (
                 <div className="flex flex-wrap items-center gap-1.5">
                   <span className="text-[13px] text-fg-label">Understood</span>
@@ -240,7 +323,15 @@ export default function Home() {
                     <span />
                   </div>
                   {result.rows.map((r, i) => (
-                    <TableRow key={r.code} row={r} rank={i + 1} open={open === r.code} onToggle={() => setOpen(open === r.code ? null : r.code)} />
+                    <TableRow
+                      key={r.code}
+                      row={r}
+                      rank={i + 1}
+                      open={open === r.code}
+                      onToggle={() => setOpen(open === r.code ? null : r.code)}
+                      inPlan={inPlan(r.code)}
+                      onTogglePlan={() => (inPlan(r.code) ? removeFromPlan(r.code, term) : addToPlan([r]))}
+                    />
                   ))}
                 </div>
               </div>
@@ -260,6 +351,8 @@ export default function Home() {
             )}
           </div>
         )}
+
+        <Planner terms={terms} plans={plans} current={term} open={planOpen} onClose={() => setPlanOpen(false)} onMove={moveInPlan} onRemove={removeFromPlan} />
       </main>
 
       <DegreeWorksDialog
@@ -275,7 +368,21 @@ export default function Home() {
   );
 }
 
-function TableRow({ row, rank, open, onToggle }: { row: Row; rank: number; open: boolean; onToggle: () => void }) {
+function TableRow({
+  row,
+  rank,
+  open,
+  onToggle,
+  inPlan,
+  onTogglePlan,
+}: {
+  row: Row;
+  rank: number;
+  open: boolean;
+  onToggle: () => void;
+  inPlan: boolean;
+  onTogglePlan: () => void;
+}) {
   const v = VERDICT[row.verdict];
   return (
     <div className={`border-t border-line ${open ? "bg-row-open" : ""}`}>
@@ -288,6 +395,7 @@ function TableRow({ row, rank, open, onToggle }: { row: Row; rank: number; open:
         <span className="font-code text-accent">{rank}</span>
         <span className="min-w-0">
           <span className="font-code text-[13px] font-semibold">{row.code}</span>
+          {inPlan && <span className="ml-2 rounded-full bg-chip-code px-2 py-px text-[11px] text-fg-2">In plan</span>}
           <br />
           <span className="text-fg-3">{row.title}</span>
         </span>
@@ -304,6 +412,12 @@ function TableRow({ row, rank, open, onToggle }: { row: Row; rank: number; open:
       </button>
       {open && (
         <div className="flex flex-col gap-3 pb-[18px] pl-[68px] pr-5">
+          {(row.takeIf.length > 0 || row.avoidIf.length > 0) && (
+            <div className="grid max-w-[70ch] gap-3 sm:grid-cols-2">
+              <ReasonList title="Take this course if" tone="text-take-fg" items={row.takeIf} />
+              <ReasonList title="Avoid this course if" tone="text-skip-fg" items={row.avoidIf} />
+            </div>
+          )}
           <p className="m-0 max-w-[70ch] text-pretty text-fg-2">{row.summary}</p>
           <span className="flex items-center gap-1.5">
             {[0, 1, 2].map((d) => (
@@ -312,7 +426,49 @@ function TableRow({ row, rank, open, onToggle }: { row: Row; rank: number; open:
             <span className="text-[13px] text-fg-muted">{EVIDENCE_LABEL[row.evidence]}</span>
           </span>
           {row.warning && <div className="max-w-[70ch] rounded-[10px] bg-warn-bg px-3.5 py-2.5 text-sm text-warn-fg">{row.warning}</div>}
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="text-[13px] text-fg-label">Sources</span>
+            {row.sources.map((s) => (
+              <a
+                key={s.url + s.label}
+                href={s.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="rounded-full border border-line-btn px-2.5 py-[3px] text-[13px] text-fg-3 no-underline hover:border-accent hover:text-fg"
+              >
+                {s.label} ↗
+              </a>
+            ))}
+          </div>
+          <div>
+            <button
+              type="button"
+              onClick={onTogglePlan}
+              className={`cursor-pointer rounded-[10px] px-3.5 py-2 text-sm font-medium ${
+                inPlan ? "border border-line-btn bg-transparent text-fg-2" : "border-0 bg-accent text-on-accent"
+              }`}
+            >
+              {inPlan ? "Remove from plan" : "Add to plan"}
+            </button>
+          </div>
         </div>
+      )}
+    </div>
+  );
+}
+
+function ReasonList({ title, tone, items }: { title: string; tone: string; items: string[] }) {
+  return (
+    <div className="flex flex-col gap-1.5 rounded-[10px] bg-panel px-3.5 py-3">
+      <span className={`text-xs font-medium uppercase tracking-[0.05em] ${tone}`}>{title}</span>
+      {items.length ? (
+        <ul className="m-0 flex list-none flex-col gap-1.5 p-0 text-sm text-fg-2">
+          {items.map((t) => (
+            <li key={t}>{t}</li>
+          ))}
+        </ul>
+      ) : (
+        <span className="text-sm text-fg-muted">Nothing stands out.</span>
       )}
     </div>
   );

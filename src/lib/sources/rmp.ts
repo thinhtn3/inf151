@@ -6,6 +6,7 @@ const ENDPOINT = "https://www.ratemyprofessors.com/graphql";
 const UCI_SCHOOL_ID = "U2Nob29sLTEwNzQ="; // School-1074
 
 type RmpTeacher = {
+  legacyId: number;
   firstName: string;
   lastName: string;
   avgRating: number;
@@ -17,6 +18,7 @@ type RmpTeacher = {
 
 export type ProfessorRating = {
   name: string;
+  url: string; // the professor's RateMyProfessors page
   rating: number;
   difficulty: number;
   numRatings: number;
@@ -26,14 +28,14 @@ export type ProfessorRating = {
 
 const QUERY = `query($text: String!, $schoolID: ID!) {
   newSearch { teachers(query: {text: $text, schoolID: $schoolID}, first: 3) { edges { node {
-    firstName lastName avgRating avgDifficulty numRatings wouldTakeAgainPercent
+    legacyId firstName lastName avgRating avgDifficulty numRatings wouldTakeAgainPercent
     ratings(first: 40) { edges { node { class comment difficultyRating } } }
   } } } }
 }`;
 
 // Anteater gives "LAST, F." — search by last name and match the first initial.
 export function lookupProfessor(anteaterName: string, courseLabel: string): Promise<ProfessorRating | null> {
-  return cached(`rmp:${anteaterName}:${courseLabel}`, 24 * HOUR, async () => {
+  return cached(`rmp:v2:${anteaterName}:${courseLabel}`, 24 * HOUR, async () => {
     const [last, first = ""] = anteaterName.split(",").map((s) => s.trim());
     const res = await fetch(ENDPOINT, {
       method: "POST",
@@ -60,6 +62,7 @@ export function lookupProfessor(anteaterName: string, courseLabel: string): Prom
 
     return {
       name: `${match.firstName} ${match.lastName}`,
+      url: `https://www.ratemyprofessors.com/professor/${match.legacyId}`,
       rating: match.avgRating,
       difficulty: match.avgDifficulty,
       numRatings: match.numRatings,

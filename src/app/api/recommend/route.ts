@@ -4,7 +4,7 @@ import { z } from "zod";
 import { parseCourse, type CourseRef } from "@/lib/courses";
 import { fetchCatalog, fetchOffering, fetchTerms, type Term } from "@/lib/sources/anteater";
 import { lookupProfessor } from "@/lib/sources/rmp";
-import type { Row, Verdict } from "@/lib/types";
+import type { Row, Source, Verdict } from "@/lib/types";
 // Reddit is a placeholder for now (PullPush rate-limits automated access); re-enable when a source is sorted out.
 // import { searchReddit } from "@/lib/sources/reddit";
 
@@ -45,7 +45,9 @@ const Request = z.object({
 const Recommendation = z.object({
   course: z.string().describe("The course label exactly as given in the data, e.g. 'I&C SCI 33'"),
   verdict: z.enum(["take", "caveats", "skip"]).describe("take = strong fit; caveats = workable with real downsides; skip = poor fit or better to delay"),
-  summary: z.string().describe("2-3 sentences tying the evidence to what the student asked for"),
+  takeIf: z.array(z.string()).describe("2-3 short, concrete reasons to take this course, each a 'you' condition grounded in the data, e.g. 'You want a clear lecturer (4.6 on RateMyProfessors)'"),
+  avoidIf: z.array(z.string()).describe("1-3 short, concrete reasons to avoid it, same style, grounded in the data, e.g. 'You need a light load: students call the weekly projects heavy'. Empty only if the data shows no real downside"),
+  summary: z.string().describe("One or two sentences: the overall call for this student, tying the evidence to what they asked for"),
   warning: z.string().describe("One short warning (full section, prerequisite, required course, workload) or an empty string"),
   evidence: z.enum(["none", "limited", "some", "strong"]).describe("How much data backs this call"),
 });
@@ -92,13 +94,14 @@ type Gathered = Awaited<ReturnType<typeof gatherCourse>>;
 type Found = Extract<Gathered, { status: "ok" }>;
 
 // The table columns come straight from the fetched data (not from the model), so they can't be invented.
-function facts(g: Found): Pick<Row, "code" | "title" | "instructor" | "rating" | "gpa" | "seats"> {
+function facts(g: Found): Pick<Row, "code" | "title" | "units" | "instructor" | "rating" | "gpa" | "seats"> {
   const profs = g.professorsThisQuarter;
   const lead = profs[0];
   const names = profs.slice(0, 2).map((p) => p.name).join(" / ") + (profs.length > 2 ? ` +${profs.length - 2}` : "");
   return {
     code: g.course,
     title: g.title,
+    units: g.units,
     instructor: names || (g.onlyStaffListed ? "STAFF" : "Not announced"),
     rating: lead?.rmp ? `${lead.rmp.rating.toFixed(1)} (${lead.rmp.numRatings})` : "No ratings",
     gpa: lead?.avgGPA != null ? lead.avgGPA.toFixed(2) : "No data",
@@ -106,9 +109,28 @@ function facts(g: Found): Pick<Row, "code" | "title" | "instructor" | "rating" |
   };
 }
 
+// Links to the places the numbers came from, only for data we actually found for this course.
+function sourcesFor(g: Found, term: Term): Source[] {
+  const out: Source[] = [];
+  for (const p of g.professorsThisQuarter.slice(0, 3)) {
+    if (p.rmp) out.push({ label: `RateMyProfessors · ${p.name.split(",")[0]}`, url: p.rmp.url });
+  }
+  if (g.recentCourseGPA.value != null || g.professorsThisQuarter.some((p) => p.avgGPA != null)) {
+    out.push({ label: "Grade history · PeterPortal", url: `https://peterportal.org/course/${encodeURIComponent(g.course.replace(/\s+/g, ""))}` });
+  }
+  out.push({ label: `Schedule · WebSoc ${term.label}`, url: "https://www.reg.uci.edu/perl/WebSoc" });
+  return out;
+}
+
 const key = (s: string) => s.toUpperCase().replace(/[^A-Z0-9]/g, "");
 
-export async function POST(req: Request) {
+async function handle(req: Request) {
+  if (!process.env.GOOGLE_GENERATIVE_AI_API_KEY && !process.env.AI_GATEWAY_API_KEY) {
+    return Response.json(
+      { error: "The server has no model API key. Add GOOGLE_GENERATIVE_AI_API_KEY in your hosting environment variables (Vercel: Settings → Environment Variables), then redeploy." },
+      { status: 500 },
+    );
+  }
   const parsed = Request.safeParse(await req.json().catch(() => null));
   if (!parsed.success) {
     const why = parsed.error.issues.map((i) => `${i.path.join(".") || "body"}: ${i.message}`).join("; ");
@@ -156,7 +178,7 @@ export async function POST(req: Request) {
       "history or no RMP data is new/unknown: say so. If only STAFF is listed, say the instructor isn't announced yet. Rank every course " +
       "for this student's stated preferences, best fit first, and set evidence honestly (few sections, few ratings, or no RMP data means " +
       "limited or none). GPA is a proxy for difficulty, not quality. If several candidates satisfy the same requirement, rank them " +
-      "against each other. Keep each summary short and concrete.",
+      "against each other. Keep every line short and concrete; the summary must not repeat the takeIf/avoidIf lines.",
     prompt:
       `Quarter: ${term.label}\nStudent preferences: ${parsed.data.preferences || "(none given)"}\n` +
       `Courses the student is already taking now (consider total workload, do not recommend them): ${parsed.data.currentlyTaking.join(", ") || "(none given)"}\n\n` +
@@ -170,13 +192,29 @@ export async function POST(req: Request) {
     const g = byKey.get(key(r.course));
     if (!g) continue;
     byKey.delete(key(r.course));
-    rows.push({ ...facts(g), verdict: r.verdict as Verdict, summary: r.summary, warning: r.warning.trim(), evidence: EVIDENCE[r.evidence] });
+    rows.push({ ...facts(g), verdict: r.verdict as Verdict, takeIf: r.takeIf, avoidIf: r.avoidIf, summary: r.summary, warning: r.warning.trim(), evidence: EVIDENCE[r.evidence], sources: sourcesFor(g, term) });
   }
   for (const g of byKey.values()) {
-    rows.push({ ...facts(g), verdict: "caveats", summary: "The ranking didn't return an assessment for this course.", warning: "", evidence: 0 });
+    rows.push({ ...facts(g), verdict: "caveats", takeIf: [], avoidIf: [], summary: "The ranking didn't return an assessment for this course.", warning: "", evidence: 0, sources: sourcesFor(g, term) });
   }
 
   return Response.json({ term, rows, notOffered, noData });
+}
+
+function describe(err: unknown): string {
+  const msg = err instanceof Error ? err.message : String(err);
+  if (/429|quota|rate.?limit|RESOURCE_EXHAUSTED/i.test(msg)) return "The model's rate limit was hit. Wait a minute and try again, or rank fewer courses.";
+  if (/API key|api_key|permission|unauthori[sz]ed|401|403/i.test(msg)) return "The model rejected the server's API key. Check the key in your environment variables.";
+  return `Ranking failed: ${msg.slice(0, 200)}`;
+}
+
+export async function POST(req: Request) {
+  try {
+    return await handle(req);
+  } catch (err) {
+    console.error("recommend failed", err);
+    return Response.json({ error: describe(err) }, { status: 500 });
+  }
 }
 
 export async function GET() {

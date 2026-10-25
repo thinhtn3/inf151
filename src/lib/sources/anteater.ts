@@ -50,19 +50,30 @@ type WebSocSection = {
   maxCapacity: string;
   numOnWaitlist: string;
   numCurrentlyEnrolled: { totalEnrolled: string };
-  meetings: { timeIsTBA: boolean; days?: string; startTime?: { hour: number; minute: number }; endTime?: { hour: number; minute: number } }[];
+  sectionNum: string;
+  units: string;
+  meetings: { timeIsTBA: boolean; bldg?: string[]; days?: string; startTime?: Clock; endTime?: Clock }[];
+  finalExam: { examStatus: string; month?: number; day?: number; startTime?: Clock; endTime?: Clock };
   isCancelled: boolean;
 };
+type Clock = { hour: number; minute: number };
+type WebSocCourse = { courseNumber: string; courseTitle: string; sections: WebSocSection[] };
+
+// One cached WebSoc call per course and term, shared by the recommender and the planner.
+function fetchWebSoc(course: CourseRef, term: Term): Promise<WebSocCourse[]> {
+  return cached(`websoc:${term.year}${term.quarter}:${courseId(course)}`, HOUR / 2, async () => {
+    const q = `year=${term.year}&quarter=${term.quarter}&department=${encodeURIComponent(course.department)}&courseNumber=${encodeURIComponent(course.number)}`;
+    const data = await get<{ schools: { departments: { courses: WebSocCourse[] }[] }[] }>(`/websoc?${q}`);
+    return data.schools.flatMap((s) => s.departments.flatMap((d) => d.courses)).filter((c) => c.courseNumber.toUpperCase() === course.number);
+  });
+}
 
 const SECONDARY = new Set(["Lab", "Dis", "Qui", "Quiz", "Tap", "Tut", "Act", "Fld"]);
 const num = (v: string | undefined) => (v && v.trim() !== "" && !Number.isNaN(Number(v)) ? Number(v) : null);
 const hhmm = (t?: { hour: number; minute: number }) => (t ? `${t.hour}:${String(t.minute).padStart(2, "0")}` : "");
 
 export function fetchOffering(course: CourseRef, term: Term): Promise<Offering> {
-  return cached(`websoc:${term.year}${term.quarter}:${courseId(course)}`, HOUR / 2, async () => {
-    const q = `year=${term.year}&quarter=${term.quarter}&department=${encodeURIComponent(course.department)}&courseNumber=${encodeURIComponent(course.number)}`;
-    const data = await get<{ schools: { departments: { courses: { courseNumber: string; sections: WebSocSection[] }[] }[] }[] }>(`/websoc?${q}`);
-    const courses = data.schools.flatMap((s) => s.departments.flatMap((d) => d.courses)).filter((c) => c.courseNumber.toUpperCase() === course.number);
+  return fetchWebSoc(course, term).then((courses) => {
     const all = courses.flatMap((c) => c.sections).filter((s) => !s.isCancelled);
     if (!all.length) return { offered: false, sections: [], instructors: [], hasStaffOnly: false };
 
